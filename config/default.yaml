@@ -1,0 +1,49 @@
+# IronVeil — Default Configuration
+# Override per-project by placing an ironveil.yaml in the working directory
+# or by setting IRONVEIL_* environment variables.
+
+general:
+  project_name: "Untitled Audit"
+  output_dir: "./reports"
+  log_level: "INFO"
+  parallel_workers: 4
+
+session:
+  proxy_rotation: true
+  proxy_list_file: null
+  fingerprint_rotation: true
+  max_concurrent_sessions: 5
+  session_timeout: 300
+  cookie_persistence: true
+
+detection:
+  bot_detection_tests: true
+  behavioral_analysis: true
+  fingerprint_analysis: true
+  captcha_analysis: true
+
+evasion:
+  human_simulation: true
+  fingerprint_spoofing: true
+  timing_evasion: true
+  mouse_bezier_points: 12
+  typing_wpm_range: [45, 85]
+
+platform:
+  api_probing: true
+  integrity_checks: true
+  rate_limit_test_requests: 100
+  rng_sample_size: 10000
+
+reporting:
+  html_report: true
+  json_export: true
+  include_screenshots: true
+  risk_score_threshold: 3.0
+
+browser:
+  engine: "playwright"
+  headless: true
+  viewport_width: 1920
+  viewport_height: 1080
+  user_agent: null
