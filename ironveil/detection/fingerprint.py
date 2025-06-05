@@ -21,6 +21,7 @@ class FingerprintComponent(Enum):
     """Individual fingerprint components."""
     CANVAS_2D = "canvas_2d"
     WEBGL = "webgl"
+    WEBGL2 = "webgl2"
     WEBGL_EXTENSIONS = "webgl_extensions"
     AUDIO_CONTEXT = "audio_context"
     NAVIGATOR = "navigator"
@@ -230,6 +231,39 @@ _JS_FONTS = """
 })();
 """
 
+_JS_WEBGL2 = """
+(function() {
+    const canvas = document.createElement('canvas');
+    const gl = canvas.getContext('webgl2');
+    if (!gl) return null;
+    const ext = gl.getExtension('WEBGL_debug_renderer_info');
+    return {
+        version: gl.getParameter(gl.VERSION),
+        shadingLanguageVersion: gl.getParameter(gl.SHADING_LANGUAGE_VERSION),
+        vendor: gl.getParameter(gl.VENDOR),
+        renderer: gl.getParameter(gl.RENDERER),
+        unmaskedVendor: ext ? gl.getParameter(ext.UNMASKED_VENDOR_WEBGL) : null,
+        unmaskedRenderer: ext ? gl.getParameter(ext.UNMASKED_RENDERER_WEBGL) : null,
+        maxTextureSize: gl.getParameter(gl.MAX_TEXTURE_SIZE),
+        max3DTextureSize: gl.getParameter(gl.MAX_3D_TEXTURE_SIZE),
+        maxArrayTextureLayers: gl.getParameter(gl.MAX_ARRAY_TEXTURE_LAYERS),
+        maxColorAttachments: gl.getParameter(gl.MAX_COLOR_ATTACHMENTS),
+        maxDrawBuffers: gl.getParameter(gl.MAX_DRAW_BUFFERS),
+        maxRenderbufferSize: gl.getParameter(gl.MAX_RENDERBUFFER_SIZE),
+        maxSamples: gl.getParameter(gl.MAX_SAMPLES),
+        maxTransformFeedbackInterleavedComponents: gl.getParameter(gl.MAX_TRANSFORM_FEEDBACK_INTERLEAVED_COMPONENTS),
+        maxUniformBlockSize: gl.getParameter(gl.MAX_UNIFORM_BLOCK_SIZE),
+        maxUniformBufferBindings: gl.getParameter(gl.MAX_UNIFORM_BUFFER_BINDINGS),
+        maxVertexUniformComponents: gl.getParameter(gl.MAX_VERTEX_UNIFORM_COMPONENTS),
+        maxFragmentUniformComponents: gl.getParameter(gl.MAX_FRAGMENT_UNIFORM_COMPONENTS),
+        maxVertexOutputComponents: gl.getParameter(gl.MAX_VERTEX_OUTPUT_COMPONENTS),
+        maxFragmentInputComponents: gl.getParameter(gl.MAX_FRAGMENT_INPUT_COMPONENTS),
+        extensions: gl.getSupportedExtensions(),
+        contextAttributes: gl.getContextAttributes(),
+    };
+})();
+"""
+
 _JS_TIMEZONE = """
 (function() {
     return {
@@ -244,6 +278,7 @@ _JS_TIMEZONE = """
 _ENTROPY_ESTIMATES: Dict[str, float] = {
     FingerprintComponent.CANVAS_2D.value: 12.5,
     FingerprintComponent.WEBGL.value: 18.0,
+    FingerprintComponent.WEBGL2.value: 20.0,
     FingerprintComponent.WEBGL_EXTENSIONS.value: 8.5,
     FingerprintComponent.AUDIO_CONTEXT.value: 6.0,
     FingerprintComponent.NAVIGATOR.value: 10.0,
@@ -265,6 +300,7 @@ class FingerprintAnalyzer:
         collectors = [
             (FingerprintComponent.CANVAS_2D, self._collect_canvas),
             (FingerprintComponent.WEBGL, self._collect_webgl),
+            (FingerprintComponent.WEBGL2, self._collect_webgl2),
             (FingerprintComponent.AUDIO_CONTEXT, self._collect_audio),
             (FingerprintComponent.NAVIGATOR, self._collect_navigator),
             (FingerprintComponent.SCREEN, self._collect_screen),
@@ -313,6 +349,9 @@ class FingerprintAnalyzer:
 
     def _collect_webgl(self) -> Any:
         return self.browser.execute_js(_JS_WEBGL)
+
+    def _collect_webgl2(self) -> Any:
+        return self.browser.execute_js(_JS_WEBGL2)
 
     def _collect_audio(self) -> Any:
         return self.browser.execute_js(_JS_AUDIO)
