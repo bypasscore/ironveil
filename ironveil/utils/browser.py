@@ -1,9 +1,12 @@
 """
 IronVeil Browser Automation Utilities
 
-Provides a unified wrapper around Selenium for browser automation
-during security audits. Handles page loading, JavaScript execution,
-screenshot capture, and element interaction.
+Provides a unified wrapper around Selenium and Playwright for browser
+automation during security audits. Handles page loading, JavaScript
+execution, screenshot capture, and element interaction.
+
+Supports both Selenium WebDriver and Playwright backends, selected
+via the ``engine`` parameter in BrowserConfig.
 """
 
 import logging
@@ -23,6 +26,7 @@ class BrowserConfig:
 
     def __init__(
         self,
+        engine: str = "playwright",
         headless: bool = True,
         viewport: Tuple[int, int] = (1920, 1080),
         user_agent: Optional[str] = None,
@@ -33,6 +37,7 @@ class BrowserConfig:
         disable_images: bool = False,
         extra_args: Optional[List[str]] = None,
     ) -> None:
+        self.engine = engine  # "playwright" or "selenium"
         self.headless = headless
         self.viewport = viewport
         self.user_agent = user_agent
@@ -45,6 +50,7 @@ class BrowserConfig:
 
     def to_dict(self) -> Dict[str, Any]:
         return {
+            "engine": self.engine,
             "headless": self.headless,
             "viewport": self.viewport,
             "user_agent": self.user_agent,
@@ -55,25 +61,149 @@ class BrowserConfig:
         }
 
 
-class BrowserWrapper:
-    """Unified browser automation wrapper.
+class _PlaywrightBackend:
+    """Playwright-based browser backend."""
 
-    Wraps Selenium WebDriver, providing convenience methods for
-    audit operations.  Playwright support will be added later.
-    """
-
-    def __init__(self, config: Optional[BrowserConfig] = None) -> None:
-        self.config = config or BrowserConfig()
-        self._driver: Any = None
-        self._page_load_count = 0
-        self._screenshots: List[str] = []
+    def __init__(self, config: BrowserConfig) -> None:
+        self.config = config
+        self._playwright: Any = None
+        self._browser: Any = None
+        self._context: Any = None
+        self._page: Any = None
 
     def launch(self) -> None:
-        """Launch the browser with the configured options."""
+        try:
+            from playwright.sync_api import sync_playwright
+        except ImportError:
+            raise BrowserError("playwright is not installed — run `pip install playwright && playwright install`")
+
+        try:
+            self._playwright = sync_playwright().start()
+            launch_args = list(self.config.extra_args)
+
+            browser_kwargs: Dict[str, Any] = {
+                "headless": self.config.headless,
+                "args": launch_args,
+            }
+
+            if self.config.proxy:
+                browser_kwargs["proxy"] = {"server": self.config.proxy}
+
+            self._browser = self._playwright.chromium.launch(**browser_kwargs)
+
+            context_kwargs: Dict[str, Any] = {
+                "viewport": {"width": self.config.viewport[0], "height": self.config.viewport[1]},
+                "locale": self.config.language,
+            }
+            if self.config.user_agent:
+                context_kwargs["user_agent"] = self.config.user_agent
+            if self.config.timezone:
+                context_kwargs["timezone_id"] = self.config.timezone
+
+            self._context = self._browser.new_context(**context_kwargs)
+            self._context.set_default_timeout(self.config.timeout * 1000)
+
+            if self.config.disable_images:
+                self._context.route("**/*.{png,jpg,jpeg,gif,svg,webp}", lambda route: route.abort())
+
+            self._page = self._context.new_page()
+            logger.info("Playwright browser launched (headless=%s)", self.config.headless)
+        except ImportError:
+            raise
+        except Exception as exc:
+            raise BrowserError(f"Failed to launch Playwright browser: {exc}") from exc
+
+    def navigate(self, url: str, wait: float = 0) -> None:
+        self._page.goto(url, wait_until="domcontentloaded")
+        if wait > 0:
+            time.sleep(wait)
+
+    def current_url(self) -> str:
+        return self._page.url
+
+    def page_source(self) -> str:
+        return self._page.content()
+
+    def title(self) -> str:
+        return self._page.title()
+
+    def execute_js(self, script: str, *args: Any) -> Any:
+        # Playwright uses evaluate, which expects an expression, not a "return" statement.
+        # Strip leading "return " if present for Selenium-style scripts.
+        clean = script.strip()
+        if clean.startswith("return "):
+            clean = clean[7:]
+        return self._page.evaluate(clean)
+
+    def screenshot(self, path: str) -> str:
+        self._page.screenshot(path=path, full_page=False)
+        return path
+
+    def find_element(self, css: str) -> Any:
+        return self._page.query_selector(css)
+
+    def find_elements(self, css: str) -> List[Any]:
+        return self._page.query_selector_all(css)
+
+    def get_cookies(self) -> List[Dict[str, Any]]:
+        return self._context.cookies()
+
+    def add_cookie(self, cookie: Dict[str, Any]) -> None:
+        self._context.add_cookies([cookie])
+
+    def delete_all_cookies(self) -> None:
+        self._context.clear_cookies()
+
+    def get_console_logs(self) -> List[Dict[str, Any]]:
+        # Playwright handles console via event listeners; return empty for now
+        return []
+
+    def get_network_entries(self) -> List[Dict[str, Any]]:
+        entries = self._page.evaluate(
+            "window.performance.getEntriesByType('resource').map(e => ({"
+            "  name: e.name, duration: e.duration, transferSize: e.transferSize,"
+            "  initiatorType: e.initiatorType"
+            "}))"
+        )
+        return entries or []
+
+    def close(self) -> None:
+        if self._context:
+            try:
+                self._context.close()
+            except Exception:
+                pass
+        if self._browser:
+            try:
+                self._browser.close()
+            except Exception:
+                pass
+        if self._playwright:
+            try:
+                self._playwright.stop()
+            except Exception:
+                pass
+        self._page = None
+        self._context = None
+        self._browser = None
+        self._playwright = None
+
+    @property
+    def is_alive(self) -> bool:
+        return self._page is not None
+
+
+class _SeleniumBackend:
+    """Selenium-based browser backend."""
+
+    def __init__(self, config: BrowserConfig) -> None:
+        self.config = config
+        self._driver: Any = None
+
+    def launch(self) -> None:
         try:
             from selenium import webdriver
             from selenium.webdriver.chrome.options import Options
-            from selenium.webdriver.chrome.service import Service
 
             options = Options()
             if self.config.headless:
@@ -96,83 +226,58 @@ class BrowserWrapper:
             self._driver = webdriver.Chrome(options=options)
             self._driver.set_page_load_timeout(self.config.timeout)
             self._driver.implicitly_wait(self.config.timeout)
-            logger.info("Browser launched (headless=%s)", self.config.headless)
+            logger.info("Selenium browser launched (headless=%s)", self.config.headless)
         except ImportError:
             raise BrowserError("selenium is not installed — run `pip install selenium`")
         except Exception as exc:
-            raise BrowserError(f"Failed to launch browser: {exc}") from exc
+            raise BrowserError(f"Failed to launch Selenium browser: {exc}") from exc
 
     def navigate(self, url: str, wait: float = 0) -> None:
-        """Navigate to *url* and optionally wait."""
-        self._ensure_driver()
-        logger.debug("Navigating to %s", url)
         self._driver.get(url)
-        self._page_load_count += 1
         if wait > 0:
             time.sleep(wait)
 
     def current_url(self) -> str:
-        self._ensure_driver()
         return self._driver.current_url
 
     def page_source(self) -> str:
-        self._ensure_driver()
         return self._driver.page_source
 
     def title(self) -> str:
-        self._ensure_driver()
         return self._driver.title
 
     def execute_js(self, script: str, *args: Any) -> Any:
-        """Execute JavaScript in the browser context."""
-        self._ensure_driver()
         return self._driver.execute_script(script, *args)
 
     def screenshot(self, path: str) -> str:
-        """Save a screenshot and return the file path."""
-        self._ensure_driver()
         self._driver.save_screenshot(path)
-        self._screenshots.append(path)
-        logger.debug("Screenshot saved: %s", path)
         return path
 
     def find_element(self, css: str) -> Any:
-        """Find a single element by CSS selector."""
-        self._ensure_driver()
         from selenium.webdriver.common.by import By
         return self._driver.find_element(By.CSS_SELECTOR, css)
 
     def find_elements(self, css: str) -> List[Any]:
-        """Find all elements matching a CSS selector."""
-        self._ensure_driver()
         from selenium.webdriver.common.by import By
         return self._driver.find_elements(By.CSS_SELECTOR, css)
 
     def get_cookies(self) -> List[Dict[str, Any]]:
-        """Return all cookies from the current browser session."""
-        self._ensure_driver()
         return self._driver.get_cookies()
 
     def add_cookie(self, cookie: Dict[str, Any]) -> None:
-        self._ensure_driver()
         self._driver.add_cookie(cookie)
 
     def delete_all_cookies(self) -> None:
-        self._ensure_driver()
         self._driver.delete_all_cookies()
 
     def get_console_logs(self) -> List[Dict[str, Any]]:
-        """Retrieve browser console logs (Chrome only)."""
-        self._ensure_driver()
         try:
             return self._driver.get_log("browser")
         except Exception:
             return []
 
     def get_network_entries(self) -> List[Dict[str, Any]]:
-        """Retrieve performance/network entries via JS."""
-        self._ensure_driver()
-        entries = self.execute_js(
+        entries = self._driver.execute_script(
             "return window.performance.getEntriesByType('resource').map(e => ({"
             "  name: e.name, duration: e.duration, transferSize: e.transferSize,"
             "  initiatorType: e.initiatorType"
@@ -181,21 +286,125 @@ class BrowserWrapper:
         return entries or []
 
     def close(self) -> None:
-        """Close the browser."""
         if self._driver:
             try:
                 self._driver.quit()
             except Exception:
                 pass
             self._driver = None
-            logger.info("Browser closed (pages_loaded=%d)", self._page_load_count)
+
+    @property
+    def is_alive(self) -> bool:
+        return self._driver is not None
+
+
+class BrowserWrapper:
+    """Unified browser automation wrapper.
+
+    Supports both Playwright and Selenium backends, selected via
+    ``BrowserConfig.engine``. Provides a consistent API regardless
+    of the underlying automation library.
+    """
+
+    def __init__(self, config: Optional[BrowserConfig] = None) -> None:
+        self.config = config or BrowserConfig()
+        self._backend: Any = None
+        self._page_load_count = 0
+        self._screenshots: List[str] = []
+
+    def launch(self) -> None:
+        """Launch the browser with the configured engine and options."""
+        if self.config.engine == "playwright":
+            self._backend = _PlaywrightBackend(self.config)
+        elif self.config.engine == "selenium":
+            self._backend = _SeleniumBackend(self.config)
+        else:
+            raise BrowserError(f"Unknown browser engine: {self.config.engine}. Use 'playwright' or 'selenium'.")
+        self._backend.launch()
+
+    def navigate(self, url: str, wait: float = 0) -> None:
+        """Navigate to *url* and optionally wait."""
+        self._ensure_backend()
+        logger.debug("Navigating to %s", url)
+        self._backend.navigate(url, wait)
+        self._page_load_count += 1
+
+    def current_url(self) -> str:
+        self._ensure_backend()
+        return self._backend.current_url()
+
+    def page_source(self) -> str:
+        self._ensure_backend()
+        return self._backend.page_source()
+
+    def title(self) -> str:
+        self._ensure_backend()
+        return self._backend.title()
+
+    def execute_js(self, script: str, *args: Any) -> Any:
+        """Execute JavaScript in the browser context."""
+        self._ensure_backend()
+        return self._backend.execute_js(script, *args)
+
+    def screenshot(self, path: str) -> str:
+        """Save a screenshot and return the file path."""
+        self._ensure_backend()
+        self._backend.screenshot(path)
+        self._screenshots.append(path)
+        logger.debug("Screenshot saved: %s", path)
+        return path
+
+    def find_element(self, css: str) -> Any:
+        """Find a single element by CSS selector."""
+        self._ensure_backend()
+        return self._backend.find_element(css)
+
+    def find_elements(self, css: str) -> List[Any]:
+        """Find all elements matching a CSS selector."""
+        self._ensure_backend()
+        return self._backend.find_elements(css)
+
+    def get_cookies(self) -> List[Dict[str, Any]]:
+        """Return all cookies from the current browser session."""
+        self._ensure_backend()
+        return self._backend.get_cookies()
+
+    def add_cookie(self, cookie: Dict[str, Any]) -> None:
+        self._ensure_backend()
+        self._backend.add_cookie(cookie)
+
+    def delete_all_cookies(self) -> None:
+        self._ensure_backend()
+        self._backend.delete_all_cookies()
+
+    def get_console_logs(self) -> List[Dict[str, Any]]:
+        """Retrieve browser console logs."""
+        self._ensure_backend()
+        return self._backend.get_console_logs()
+
+    def get_network_entries(self) -> List[Dict[str, Any]]:
+        """Retrieve performance/network entries via JS."""
+        self._ensure_backend()
+        return self._backend.get_network_entries()
+
+    def close(self) -> None:
+        """Close the browser."""
+        if self._backend:
+            self._backend.close()
+            engine_name = self.config.engine
+            self._backend = None
+            logger.info("Browser closed (%s, pages_loaded=%d)", engine_name, self._page_load_count)
 
     @property
     def page_load_count(self) -> int:
         return self._page_load_count
 
-    def _ensure_driver(self) -> None:
-        if self._driver is None:
+    @property
+    def engine(self) -> str:
+        return self.config.engine
+
+    def _ensure_backend(self) -> None:
+        if self._backend is None:
             raise BrowserError("Browser not launched — call .launch() first")
 
     def __enter__(self):
