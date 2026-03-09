@@ -120,6 +120,12 @@ ironveil/
 
 IronVeil is designed for **authorized security assessments only**. Always obtain written permission before testing any platform. Unauthorized use against platforms you do not own or have permission to test may violate applicable laws.
 
+## Contact
+
+- **Email:** [contact@bypasscore.com](mailto:contact@bypasscore.com)
+- **Telegram:** [@bypasscore](https://t.me/bypasscore)
+- **Web:** [bypasscore.com](https://bypasscore.com)
+
 ## License
 
 MIT License — see [LICENSE](LICENSE) for details.
