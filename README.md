@@ -126,6 +126,12 @@ IronVeil is designed for **authorized security assessments only**. Always obtain
 - **Telegram:** [@bypasscore](https://t.me/bypasscore)
 - **Web:** [bypasscore.com](https://bypasscore.com)
 
+## Support
+
+Help keep BypassCore open-source and independent.
+
+**USDT (Polygon):** `0xd0f38b51496bee61ea5e9e56e2c414b607ab011a`
+
 ## License
 
 MIT License — see [LICENSE](LICENSE) for details.
